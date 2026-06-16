@@ -74,7 +74,7 @@ early warning signs. CALL for high/critical only. ESCALATE only for
 imminent default risk."""
 
     resp = groq_client.chat.completions.create(
-        model=MODEL,
+        model="llama-3.1-8b-instant",
         messages=[{"role": "user", "content": prompt}],
         response_format={"type": "json_object"},
         temperature=0.1
