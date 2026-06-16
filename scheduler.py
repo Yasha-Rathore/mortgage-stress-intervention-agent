@@ -188,6 +188,7 @@ def main():
     customers = (
         sb.table('customers').select('*')
         .in_('risk_tier', ['Moderate', 'Severe'])
+        .limit(35)
         .execute().data
     )
     print(f"Triaging {len(customers)} at-risk customers")
