@@ -21,7 +21,14 @@ from sendgrid.helpers.mail import Mail
 import requests
 
 # ──────────────────────────────────────────────────────────────────────
-# Configuration
+import os
+print(f"[DEBUG] GROQ_API_KEY length: {len(os.environ.get('GROQ_API_KEY', ''))}", flush=True)
+print(f"[DEBUG] GROQ_API_KEY first 6 chars: {os.environ.get('GROQ_API_KEY', '')[:6]!r}", flush=True)
+print(f"[DEBUG] SUPABASE_KEY length: {len(os.environ.get('SUPABASE_KEY', ''))}", flush=True)
+print(f"[DEBUG] SUPABASE_KEY first 12 chars: {os.environ.get('SUPABASE_KEY', '')[:12]!r}", flush=True)
+print(f"[DEBUG] SENDGRID_KEY length: {len(os.environ.get('SENDGRID_KEY', ''))}", flush=True)
+print(f"[DEBUG] SENDGRID_KEY first 3 chars: {os.environ.get('SENDGRID_KEY', '')[:3]!r}", flush=True)
+import sys; sys.stdout.flush()
 # ──────────────────────────────────────────────────────────────────────
 
 SUPABASE_URL  = os.environ["SUPABASE_URL"]
