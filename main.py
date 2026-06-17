@@ -122,17 +122,42 @@ Respond in JSON: {{"subject": "...", "body_text": "..."}}
 """
 
 VOICE_TURN_PROMPT = """You are Maya, a home loan specialist at Commonwealth Bank,
-on a phone call with {customer_name} (their risk tier: {risk_tier}).
+on a phone call with {customer_name}.
 
-Goal: do a routine wellbeing check. Listen for stress signals such as job
-changes, reduced hours, medical costs, family changes. Where appropriate
-offer one of:
+INTERNAL CONTEXT (do not share unless the customer specifically asks
+why you called):
+- Customer risk tier: {risk_tier}
+- Triage signals that flagged this customer: {key_signals}
+- Bank's internal reasoning: {reasoning}
+
+YOUR GOAL: a warm wellbeing check-in. Listen for stress signals.
+You can offer if appropriate:
 - 3-month repayment pause
 - Switch to interest-only for 6 months
 - Referral to the financial hardship team
 
-Be warm, conversational, human. Never mention risk scores or internal data.
-Keep responses short (1-3 sentences) like a real phone call.
+CONVERSATION RULES:
+- Be warm, human, conversational. Short responses (1-3 sentences)
+  like a real phone call.
+- Never volunteer the internal context. Never mention "risk score",
+  "stress signals", "triage", or anything that sounds like internal data.
+- If the customer DIRECTLY asks why you called or what prompted the call,
+  you may give a calibrated honest answer like:
+  "Our team noticed your account has been showing some patterns we
+  sometimes see when customers are facing pressure — like [mention
+  1-2 signals in plain English, e.g. 'a few late payments' or
+  'savings drawing down quicker than usual']. So I wanted to reach
+  out personally and see if there's anything we can help with."
+- Translate the technical signals to plain-English equivalents:
+    'savings declining 4 weeks'      → "savings drawing down quicker than usual"
+    'cc_utilisation high'            → "credit card balance creeping up"
+    'days_repayment_late > 0'        → "one of your recent repayments came in late"
+    'irregular_income'               → "income deposits look less consistent"
+    'stress_ratio > 0.45'            → "repayments are taking a big share of household income"
+- If the customer pushes back ("how do you know that?"), acknowledge
+  honestly: "We just look at patterns across accounts — nothing private,
+  just things that tend to suggest someone might be feeling the pinch.
+  I'm here if it would help to talk through options."
 
 Conversation so far:
 {history}
@@ -210,6 +235,9 @@ class ConversationTurnInput(BaseModel):
     risk_tier: str
     customer_message: str
     conversation_history: List[Dict[str, str]] = []
+    # NEW — context from the triage decision
+    key_signals: List[str] = []
+    triage_reasoning: str = ""
 
 
 class TranscriptInput(BaseModel):
@@ -296,23 +324,20 @@ def demo_draft_email(customer: CustomerInput):
         "body": content["body_text"],
     }
 
-
 @app.post("/demo/voice-turn")
 def demo_voice_turn(conv: ConversationTurnInput):
-    """Get Maya's next response in a live simulated voice conversation."""
     history_text = "\n".join(
         f"{'Maya' if m.get('role') == 'maya' else conv.customer_name}: {m.get('text', '')}"
         for m in conv.conversation_history
     )
 
     if not conv.customer_message and not conv.conversation_history:
-        # Opening turn — Maya greets first
         first_name = conv.customer_name.split()[0]
         return {
             "maya_response": (
                 f"Hi {first_name}, it's Maya from CommBank. "
-                "How are you going? I'm calling just to do a quick check-in "
-                "on your home loan — is now an okay time?"
+                "How are you going? Just wanted to do a quick check-in — "
+                "is now an okay time?"
             )
         }
 
@@ -320,12 +345,15 @@ def demo_voice_turn(conv: ConversationTurnInput):
         VOICE_TURN_PROMPT.format(
             customer_name=conv.customer_name,
             risk_tier=conv.risk_tier,
+            key_signals=", ".join(conv.key_signals) if conv.key_signals else "(none provided)",
+            reasoning=conv.triage_reasoning or "(none provided)",
             history=history_text,
             customer_message=conv.customer_message,
         ),
         temperature=0.7,
     )
     return {"maya_response": response}
+
 
 
 @app.post("/demo/summarise")
