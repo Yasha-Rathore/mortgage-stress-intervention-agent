@@ -42,7 +42,7 @@ VAPI_PHONE_ID = os.environ.get("VAPI_PHONE_ID", "")
 TEST_PHONE    = os.environ.get("TEST_PHONE", "")
 RAILWAY_URL   = os.environ.get("RAILWAY_URL", "")
 
-MODEL = "llama-3.3-70b-versatile"
+MODEL = "llama-3.1-8b-instant"
 
 sb = create_client(SUPABASE_URL, SUPABASE_KEY)
 groq_client = Groq(api_key=GROQ_API_KEY)
