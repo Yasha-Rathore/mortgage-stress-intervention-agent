@@ -346,20 +346,63 @@ def demo_summarise(t: TranscriptInput):
 
 
 @app.post("/demo/summarise-email")
-def demo_summarise_email(e: EmailReplyInput):
-    """Summarise an email + customer-reply exchange."""
-    transcript = (
-        f"--- Bank email ---\n"
-        f"Subject: {e.email_subject}\n\n{e.email_body}\n\n"
-        f"--- Customer reply ---\n{e.customer_reply}"
+class DraftEmailInput(BaseModel):
+    name: str
+    annual_income: float
+    loan_balance: float
+    monthly_repayment: float
+    savings_balance: float
+    credit_card_balance: float
+    credit_card_limit: float
+    days_late: int = 0
+    irregular_income: bool = False
+    # NEW — optional recipient for live sending
+    send_to: Optional[str] = None
+
+
+@app.post("/demo/draft-email")
+def demo_draft_email(customer: DraftEmailInput):
+    """Generate a personalised intervention email, optionally send it live."""
+    first_name = customer.name.split()[0]
+    content = llm_json(
+        EMAIL_DRAFT_PROMPT.format(first_name=first_name),
+        temperature=0.7,
     )
-    summary = llm_json(SUMMARISE_PROMPT.format(
-        channel="email",
-        name=e.customer_name,
-        risk_tier=e.risk_tier,
-        transcript=transcript,
-    ))
-    return summary
+
+    sent = False
+    sent_to = None
+    error = None
+
+    if customer.send_to:
+        try:
+            import sendgrid as _sg
+            from sendgrid.helpers.mail import Mail as _Mail
+            sg_key = os.getenv("SENDGRID_KEY")
+            sg_from = os.getenv("SENDGRID_FROM")
+            if sg_key and sg_from:
+                sg = _sg.SendGridAPIClient(api_key=sg_key)
+                msg = _Mail(
+                    from_email=(sg_from, "Maya Chen — CommBank"),
+                    to_emails=customer.send_to.strip(),
+                    subject=f"[Live Demo] {content['subject']}",
+                    plain_text_content=content["body_text"],
+                )
+                resp = sg.send(msg)
+                sent = 200 <= resp.status_code < 300
+                sent_to = customer.send_to.strip()
+            else:
+                error = "SendGrid not configured on the server"
+        except Exception as e:
+            error = str(e)
+
+    return {
+        "from": "Maya Chen <maya@commbank.com.au>",
+        "to": sent_to or f"{first_name} <demo@example.com>",
+        "subject": content["subject"],
+        "body": content["body_text"],
+        "sent_live": sent,
+        "send_error": error,
+    }
 
 
 # ──────────────────────────────────────────────────────────────────────
