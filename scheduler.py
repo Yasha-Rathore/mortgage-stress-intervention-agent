@@ -253,17 +253,17 @@ def main():
 
     report = generate_weekly_report(week, log)
     sb.table('weekly_reports').upsert({
-        'week': week,
-        'total_interventions': len(log),
-        'resolved': sum(1 for i in log if i.get('outcome') == 'resolved'),
-        'escalated': sum(1 for i in log if i.get('outcome') == 'escalate_to_human'),
-        'acceptance_rate': (
-            sum(1 for i in log if i.get('offer_accepted', 'none') != 'none')
-            / max(1, len(log))
-        ),
-        'report_text': report
-    }).execute()
-
+    'week': week,
+    'total_interventions': len(log),
+    'resolved': sum(1 for i in log if i.get('outcome') == 'resolved'),
+    'escalated': sum(1 for i in log if i.get('outcome') == 'escalate_to_human'),
+    'acceptance_rate': (
+        sum(1 for i in log if i.get('offer_accepted', 'none') != 'none')
+        / max(1, len(log))
+    ),
+    'report_text': report
+}, on_conflict='week').execute()
+    
     print(f"\n[OK] Week {week}: {len(log)} interventions logged.")
 
 
