@@ -3,7 +3,7 @@ Early Stress Intervention Orchestrator — FastAPI Backend
 =========================================================
 Hosts:
   - Vapi voice-call webhook (receives transcripts when calls end)
-  - Four /demo/* endpoints powering the interactive Lovable demo
+  - Five /demo/* endpoints powering the interactive Lovable demo
   - Health-check at /
 
 Deployed on Railway. Connects to Supabase for persistence and Groq for the
@@ -32,8 +32,6 @@ app = FastAPI(
     version="1.0.0",
 )
 
-# CORS open for the Lovable frontend. In production restrict to the
-# Lovable preview URL and any published custom domain.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -44,8 +42,7 @@ app.add_middleware(
 
 
 # ──────────────────────────────────────────────────────────────────────
-# Lazy clients (created on first request so missing env vars don't crash
-# the cold-start health-check)
+# Lazy clients
 # ──────────────────────────────────────────────────────────────────────
 _sb = None
 _groq = None
@@ -54,8 +51,8 @@ _groq = None
 def supabase():
     global _sb
     if _sb is None:
-        url = os.getenv("SUPABASE_URL")
-        key = os.getenv("SUPABASE_KEY")
+        url = os.getenv("SUPABASE_URL", "").strip()
+        key = os.getenv("SUPABASE_KEY", "").strip()
         if not url or not key:
             raise HTTPException(500, "Supabase credentials not configured")
         _sb = create_client(url, key)
@@ -65,7 +62,7 @@ def supabase():
 def groq_client():
     global _groq
     if _groq is None:
-        key = os.getenv("GROQ_API_KEY")
+        key = os.getenv("GROQ_API_KEY", "").strip()
         if not key:
             raise HTTPException(500, "Groq API key not configured")
         _groq = Groq(api_key=key)
@@ -76,7 +73,7 @@ MODEL = "llama-3.1-8b-instant"
 
 
 # ──────────────────────────────────────────────────────────────────────
-# Agent prompts — kept here as constants so they're easy to tune.
+# Agent prompts
 # ──────────────────────────────────────────────────────────────────────
 
 TRIAGE_PROMPT = """You are a credit risk analyst at an Australian bank.
@@ -145,19 +142,17 @@ CONVERSATION RULES:
   you may give a calibrated honest answer like:
   "Our team noticed your account has been showing some patterns we
   sometimes see when customers are facing pressure — like [mention
-  1-2 signals in plain English, e.g. 'a few late payments' or
-  'savings drawing down quicker than usual']. So I wanted to reach
-  out personally and see if there's anything we can help with."
+  1-2 signals in plain English]. So I wanted to reach out personally
+  and see if there's anything we can help with."
 - Translate the technical signals to plain-English equivalents:
     'savings declining 4 weeks'      → "savings drawing down quicker than usual"
     'cc_utilisation high'            → "credit card balance creeping up"
     'days_repayment_late > 0'        → "one of your recent repayments came in late"
     'irregular_income'               → "income deposits look less consistent"
     'stress_ratio > 0.45'            → "repayments are taking a big share of household income"
-- If the customer pushes back ("how do you know that?"), acknowledge
-  honestly: "We just look at patterns across accounts — nothing private,
-  just things that tend to suggest someone might be feeling the pinch.
-  I'm here if it would help to talk through options."
+- If the customer asks "are you a real person?" or similar, answer honestly:
+  "I'm an AI assistant from CommBank — happy to put you through to a human
+   specialist if you'd prefer."
 
 Conversation so far:
 {history}
@@ -186,7 +181,7 @@ Respond ONLY in valid JSON:
 
 
 def llm_json(prompt: str, temperature: float = 0.1) -> Dict[str, Any]:
-    """Call Groq with JSON response format and parse the result."""
+    """Call Groq with JSON response format."""
     resp = groq_client().chat.completions.create(
         model=MODEL,
         messages=[{"role": "user", "content": prompt}],
@@ -207,7 +202,7 @@ def llm_text(prompt: str, temperature: float = 0.7) -> str:
 
 
 # ──────────────────────────────────────────────────────────────────────
-# Pydantic input models for the interactive demo endpoints
+# Pydantic input models
 # ──────────────────────────────────────────────────────────────────────
 
 class CustomerInput(BaseModel):
@@ -220,6 +215,8 @@ class CustomerInput(BaseModel):
     credit_card_limit: float
     days_late: int = 0
     irregular_income: bool = False
+    # Optional recipient for live email send
+    send_to: Optional[str] = None
 
 
 class EmailReplyInput(BaseModel):
@@ -235,7 +232,6 @@ class ConversationTurnInput(BaseModel):
     risk_tier: str
     customer_message: str
     conversation_history: List[Dict[str, str]] = []
-    # NEW — context from the triage decision
     key_signals: List[str] = []
     triage_reasoning: str = ""
 
@@ -260,7 +256,7 @@ def health():
 
 
 # ──────────────────────────────────────────────────────────────────────
-# Interactive demo endpoints — the Lovable "Live Demo" page calls these
+# Demo endpoints
 # ──────────────────────────────────────────────────────────────────────
 
 @app.post("/demo/triage")
@@ -311,21 +307,75 @@ def demo_triage(customer: CustomerInput):
 
 @app.post("/demo/draft-email")
 def demo_draft_email(customer: CustomerInput):
-    """Generate a personalised intervention email for the demo customer."""
+    """Generate a personalised email and optionally send it live via SendGrid."""
     first_name = customer.name.split()[0]
     content = llm_json(
         EMAIL_DRAFT_PROMPT.format(first_name=first_name),
         temperature=0.7,
     )
+
+    sent = False
+    sent_to_addr = None
+    error = None
+
+    print(f"[demo/draft-email] send_to received: {customer.send_to!r}", flush=True)
+
+    if customer.send_to:
+        try:
+            import sendgrid as _sg
+            from sendgrid.helpers.mail import Mail as _Mail
+            sg_key = os.getenv("SENDGRID_KEY", "").strip()
+            sg_from = os.getenv("SENDGRID_FROM", "").strip()
+            if sg_key and sg_from:
+                recipient = customer.send_to.strip()
+                sg = _sg.SendGridAPIClient(api_key=sg_key)
+                msg = _Mail(
+                    from_email=(sg_from, "Maya Chen — CommBank"),
+                    to_emails=recipient,
+                    subject=f"[Live Demo] {content['subject']}",
+                    plain_text_content=content["body_text"],
+                )
+                resp = sg.send(msg)
+                sent = 200 <= resp.status_code < 300
+                sent_to_addr = recipient
+                print(f"[demo/draft-email] SendGrid status: {resp.status_code}", flush=True)
+            else:
+                error = "SendGrid not configured on server"
+                print(f"[demo/draft-email] error: {error}", flush=True)
+        except Exception as e:
+            error = f"{type(e).__name__}: {str(e)}"
+            print(f"[demo/draft-email] exception: {error}", flush=True)
+
     return {
         "from": "Maya Chen <maya@commbank.com.au>",
-        "to": f"{first_name} <demo@example.com>",
+        "to": f"{first_name} <{sent_to_addr}>" if sent_to_addr else f"{first_name} <demo@example.com>",
         "subject": content["subject"],
         "body": content["body_text"],
+        "sent_live": sent,
+        "send_error": error,
     }
+
+
+@app.post("/demo/summarise-email")
+def demo_summarise_email(e: EmailReplyInput):
+    """Summarise an email + customer-reply exchange."""
+    transcript = (
+        f"--- Bank email ---\n"
+        f"Subject: {e.email_subject}\n\n{e.email_body}\n\n"
+        f"--- Customer reply ---\n{e.customer_reply}"
+    )
+    summary = llm_json(SUMMARISE_PROMPT.format(
+        channel="email",
+        name=e.customer_name,
+        risk_tier=e.risk_tier,
+        transcript=transcript,
+    ))
+    return summary
+
 
 @app.post("/demo/voice-turn")
 def demo_voice_turn(conv: ConversationTurnInput):
+    """Get Maya's next response in the simulated voice conversation."""
     history_text = "\n".join(
         f"{'Maya' if m.get('role') == 'maya' else conv.customer_name}: {m.get('text', '')}"
         for m in conv.conversation_history
@@ -355,15 +405,13 @@ def demo_voice_turn(conv: ConversationTurnInput):
     return {"maya_response": response}
 
 
-
 @app.post("/demo/summarise")
 def demo_summarise(t: TranscriptInput):
-    """Run the Summariser agent on a completed demo conversation/email."""
+    """Run the Summariser agent on a completed voice conversation."""
     transcript = "\n".join(
         f"{'Maya' if m.get('role') == 'maya' else t.customer_name}: {m.get('text', '')}"
         for m in t.conversation
     )
-
     summary = llm_json(SUMMARISE_PROMPT.format(
         channel="voice call",
         name=t.customer_name,
@@ -373,73 +421,13 @@ def demo_summarise(t: TranscriptInput):
     return summary
 
 
-@app.post("/demo/summarise-email")
-class DraftEmailInput(BaseModel):
-    name: str
-    annual_income: float
-    loan_balance: float
-    monthly_repayment: float
-    savings_balance: float
-    credit_card_balance: float
-    credit_card_limit: float
-    days_late: int = 0
-    irregular_income: bool = False
-    # NEW — optional recipient for live sending
-    send_to: Optional[str] = None
-
-
-@app.post("/demo/draft-email")
-def demo_draft_email(customer: DraftEmailInput):
-    """Generate a personalised intervention email, optionally send it live."""
-    first_name = customer.name.split()[0]
-    content = llm_json(
-        EMAIL_DRAFT_PROMPT.format(first_name=first_name),
-        temperature=0.7,
-    )
-
-    sent = False
-    sent_to = None
-    error = None
-
-    if customer.send_to:
-        try:
-            import sendgrid as _sg
-            from sendgrid.helpers.mail import Mail as _Mail
-            sg_key = os.getenv("SENDGRID_KEY")
-            sg_from = os.getenv("SENDGRID_FROM")
-            if sg_key and sg_from:
-                sg = _sg.SendGridAPIClient(api_key=sg_key)
-                msg = _Mail(
-                    from_email=(sg_from, "Maya Chen — CommBank"),
-                    to_emails=customer.send_to.strip(),
-                    subject=f"[Live Demo] {content['subject']}",
-                    plain_text_content=content["body_text"],
-                )
-                resp = sg.send(msg)
-                sent = 200 <= resp.status_code < 300
-                sent_to = customer.send_to.strip()
-            else:
-                error = "SendGrid not configured on the server"
-        except Exception as e:
-            error = str(e)
-
-    return {
-        "from": "Maya Chen <maya@commbank.com.au>",
-        "to": sent_to or f"{first_name} <demo@example.com>",
-        "subject": content["subject"],
-        "body": content["body_text"],
-        "sent_live": sent,
-        "send_error": error,
-    }
-
-
 # ──────────────────────────────────────────────────────────────────────
-# Vapi webhook — receives the end-of-call report and updates Supabase
+# Vapi webhook
 # ──────────────────────────────────────────────────────────────────────
 
 @app.post("/vapi-webhook")
 async def vapi_complete(request: Request):
-    """Process a completed Vapi call: summarise the transcript and update DB."""
+    """Process a completed Vapi call."""
     data = await request.json()
     message = data.get("message", {})
     if message.get("type") != "end-of-call-report":
