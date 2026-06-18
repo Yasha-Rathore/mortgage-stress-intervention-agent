@@ -118,7 +118,7 @@ Rules:
 Respond in JSON: {{"subject": "...", "body_text": "..."}}
 """
 
-VOICE_TURN_PROMPT = """You are Maya, a home loan specialist at Commonwealth Bank,
+
 VOICE_TURN_PROMPT = """You are Maya, a home loan specialist at Commonwealth Bank,
 on a phone call with {customer_name}.
 
